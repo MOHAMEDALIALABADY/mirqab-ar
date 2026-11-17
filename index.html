@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>مرقاب AR</title>
+<meta name="description" content="معاينة تصاميم الطرق بحجمها الحقيقي في الموقع بالواقع المعزز، مع قياس المسافات والمساحات.">
+<meta name="theme-color" content="#0e1417">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* أداة ميدانية: ألواح داكنة شبه شفافة فوق الكاميرا، لون تنبيه كهرماني للعناصر الفعّالة */
+  --ink: #0e1417;
+  --panel: rgba(14, 20, 23, .82);
+  --panel-solid: #141c20;
+  --line: rgba(255, 255, 255, .14);
+  --text: #f3f5f4;
+  --muted: #a8b3b1;
+  --accent: #ffb224;
+  --accent-ink: #1d1400;
+  --ok: #3dd68c;
+  --warn: #ffc53d;
+  --bad: #ff6369;
+  --measure: #e07bff;
+  --font: "IBM Plex Sans Arabic", "Noto Sans Arabic", "Segoe UI", Tahoma, sans-serif;
+  --r: 18px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: var(--ink); color: var(--text); font-family: var(--font); font-size: 15px; line-height: 1.5; overscroll-behavior: none; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; padding: 0; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+svg.i { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+[hidden] { display: none !important; }
+.num { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
+
+#cam, #gl { position: fixed; inset: 0; width: 100%; height: 100%; }
+#cam { object-fit: cover; background: #000; }
+#gl { display: block; pointer-events: none; }
+#ui { position: fixed; inset: 0; background: transparent; user-select: none; -webkit-user-select: none; }
+#tap { position: absolute; inset: 0; touch-action: none; }
+
+/* شريط الحالة العلوي */
+#top { position: absolute; top: calc(10px + env(safe-area-inset-top)); inset-inline: calc(12px + env(safe-area-inset-left)) calc(12px + env(safe-area-inset-right)); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+.pill { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 13px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-weight: 600; font-size: 13.5px; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 3px rgba(255,255,255,.08); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+#st-mode { color: var(--accent); }
+
+/* الأزرار الدائرية وشريط الأدوات */
+.fab { position: absolute; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.fab:active { transform: scale(.95); }
+.fab.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+#btn-menu { bottom: calc(18px + env(safe-area-inset-bottom)); left: calc(14px + env(safe-area-inset-left)); }
+#btn-map { bottom: calc(18px + env(safe-area-inset-bottom)); right: calc(14px + env(safe-area-inset-right)); }
+#toolbar { position: absolute; bottom: calc(16px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); display: flex; padding: 5px; gap: 2px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+#toolbar button { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 70px; padding: 7px 10px 5px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--text); }
+#toolbar button.on { background: var(--accent); color: var(--accent-ink); }
+
+/* الألواح السفلية */
+.sheet { position: absolute; bottom: calc(90px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); width: min(460px, calc(100% - 24px)); max-height: min(64%, 560px); overflow-y: auto; padding: 14px 14px 16px; border-radius: var(--r); background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); display: flex; flex-direction: column; gap: 12px; }
+.sheet h2 { margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sheet h3 { margin: 4px 0 0; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.x { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.08); }
+.x svg.i { width: 18px; height: 18px; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.row > .grow { flex: 1 1 120px; min-width: 0; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 14px; border-radius: 12px; background: rgba(255,255,255,.09); border: 1px solid var(--line); font-weight: 600; font-size: 14px; }
+.btn:active { background: rgba(255,255,255,.18); }
+.btn.pri { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.btn.sm { min-height: 36px; padding: 5px 10px; font-size: 13px; border-radius: 10px; }
+.btn.sm svg.i { width: 18px; height: 18px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.field input, .field select { min-height: 42px; padding: 6px 10px; border-radius: 10px; background: rgba(0,0,0,.35); border: 1px solid var(--line); color: var(--text); width: 100%; font-size: 14px; }
+.field input[dir="ltr"] { text-align: left; }
+input[type="range"] { accent-color: var(--accent); width: 100%; min-height: 28px; }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+.seg { display: inline-flex; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+.seg button { min-height: 36px; padding: 4px 12px; font-size: 13px; font-weight: 600; background: rgba(255,255,255,.05); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); }
+.switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; font-weight: 500; }
+.switch input { appearance: none; -webkit-appearance: none; width: 46px; height: 26px; border-radius: 999px; background: rgba(255,255,255,.18); position: relative; flex: none; margin: 0; cursor: pointer; transition: background .15s; }
+.switch input::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: inset-inline-start .15s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { inset-inline-start: 23px; }
+
+/* قائمة الطبقات */
+.layer { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 6px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.layer:last-child { border-bottom: 0; }
+.layer .nm { font-weight: 600; overflow-wrap: anywhere; line-height: 1.3; }
+.layer .meta { font-size: 12px; color: var(--muted); font-weight: 400; }
+.layer input[type="color"] { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; }
+.layer .op { grid-column: 3 / 5; }
+.layer.off .nm { color: var(--muted); }
+.ib { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: rgba(255,255,255,.07); }
+.ib svg.i { width: 20px; height: 20px; }
+
+/* لوحة الضبط */
+.pad { display: grid; grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(3, 52px); gap: 6px; direction: ltr; }
+.pad button, .padx button { border-radius: 14px; background: rgba(255,255,255,.09); border: 1px solid var(--line); display: grid; place-items: center; font-size: 11px; font-weight: 600; }
+.pad button:active, .padx button:active { background: var(--accent); color: var(--accent-ink); }
+.padx { display: grid; grid-template-columns: repeat(2, 64px); grid-auto-rows: 52px; gap: 6px; direction: ltr; }
+.padx button { gap: 0; line-height: 1.1; }
+.padx button svg.i { width: 20px; height: 20px; }
+.ic-l svg.i { transform: rotate(-90deg); } .ic-r svg.i { transform: rotate(90deg); } .ic-b svg.i { transform: rotate(180deg); } .ic-flip svg.i { transform: scaleX(-1); }
+
+/* أدوات القياس */
+#crosshair { position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,.45), inset 0 0 0 1px rgba(0,0,0,.45); pointer-events: none; }
+#crosshair::after { content: ""; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: #fff; }
+#crosshair.bad { border-color: var(--bad); opacity: .7; }
+#seg-chip { position: absolute; left: 50%; top: calc(50% - 58px); transform: translateX(-50%); padding: 2px 10px; border-radius: 999px; background: #fff; color: #10161a; font-weight: 700; font-size: 14px; pointer-events: none; white-space: nowrap; }
+#readout { position: absolute; top: calc(58px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; gap: 22px; padding: 8px 18px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); pointer-events: none; text-align: center; }
+#readout small { display: block; font-size: 11.5px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+#readout b { font-size: 21px; font-weight: 700; white-space: nowrap; }
+#readout .a b { color: var(--measure); }
+#m-bar { position: absolute; bottom: calc(18px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 18px 8px 14px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); max-width: calc(100% - 200px); }
+#m-bar .ic { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--measure); color: #1a0520; flex: none; }
+#m-bar b { display: block; font-size: 15px; line-height: 1.2; }
+#m-bar span { font-size: 12px; color: var(--muted); white-space: nowrap; }
+#m-btns { position: absolute; right: calc(14px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; align-items: center; }
+#m-btns .fab { position: static; }
+#m-add { width: 72px; height: 72px; background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+#m-add svg.i { width: 34px; height: 34px; stroke-width: 2.2; }
+#m-close { top: calc(8px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); width: 46px; height: 46px; }
+#ui.measuring #top { padding-left: 56px; }
+#ui.measuring #st-head { display: none; }
+#m-hint { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); font-size: 13px; font-weight: 600; padding: 3px 12px; border-radius: 999px; background: rgba(0,0,0,.55); pointer-events: none; white-space: nowrap; }
+
+.mrow { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.mrow:last-child { border-bottom: 0; }
+.mrow .v { flex: 1; min-width: 0; font-weight: 600; }
+.mrow .v small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+
+/* عصا التحكم في المحاكاة */
+#joy { position: absolute; left: calc(18px + env(safe-area-inset-left)); bottom: calc(96px + env(safe-area-inset-bottom)); width: 104px; height: 104px; border-radius: 50%; background: rgba(14,20,23,.5); border: 1px solid var(--line); touch-action: none; }
+#joy i { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px; border-radius: 50%; background: rgba(255,255,255,.85); pointer-events: none; }
+#joy::before { content: "تحرّك"; position: absolute; top: -22px; left: 0; right: 0; text-align: center; font-size: 11.5px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px #000; }
+
+/* بطاقات */
+.card { position: absolute; left: 50%; transform: translateX(-50%); width: min(430px, calc(100% - 24px)); padding: 18px; border-radius: var(--r); background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); display: flex; flex-direction: column; gap: 12px; }
+#start { top: 50%; transform: translate(-50%, -50%); }
+#start h1 { margin: 0; font-size: 26px; font-weight: 700; line-height: 1.2; text-wrap: balance; }
+#start h1 span { color: var(--accent); }
+#start p { margin: 0; color: var(--muted); }
+#start .note { font-size: 13px; padding: 8px 12px; border-radius: 10px; background: rgba(255,178,36,.12); color: #ffd68a; border: 1px solid rgba(255,178,36,.3); }
+#ident { top: calc(56px + env(safe-area-inset-top)); max-height: 52%; overflow-y: auto; }
+#ident h2 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+#ident h2 i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+#ident table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+#ident td { padding: 5px 0; border-top: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+#ident td:first-child { color: var(--muted); width: 42%; padding-inline-end: 10px; }
+#toast { position: absolute; left: 50%; top: calc(104px + env(safe-area-inset-top)); transform: translateX(-50%); max-width: calc(100% - 32px); padding: 9px 16px; border-radius: 14px; background: #f3f5f4; color: #10161a; font-weight: 600; font-size: 14px; text-align: center; pointer-events: none; opacity: 0; transition: opacity .2s; }
+#toast.show { opacity: 1; }
+
+/* الخريطة */
+#mapview { position: absolute; inset: 0; background: #1b2226; }
+#mapc { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+#mapview .fab { width: 48px; height: 48px; }
+#mv-close { top: calc(10px + env(safe-area-inset-top)); inset-inline-end: calc(12px + env(safe-area-inset-right)); }
+#mv-ctl { position: absolute; right: calc(12px + env(safe-area-inset-right)); bottom: calc(28px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; }
+#mv-ctl .fab { position: static; }
+#mv-opt { position: absolute; top: calc(12px + env(safe-area-inset-top)); inset-inline-start: calc(12px + env(safe-area-inset-left)); display: flex; gap: 8px; flex-wrap: wrap; max-width: calc(100% - 84px); }
+#mv-attr { position: absolute; bottom: calc(6px + env(safe-area-inset-bottom)); inset-inline-start: 10px; font-size: 10.5px; color: rgba(255,255,255,.75); text-shadow: 0 1px 2px #000; pointer-events: none; direction: ltr; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay hidden></video>
+<canvas id="gl"></canvas>
+
+<div id="ui">
+  <div id="tap"></div>
+
+  <div id="top">
+    <div class="pill"><i class="dot" id="st-dot"></i><span id="st-acc" class="num">محاكاة</span></div>
+    <div class="pill" id="st-mode">محاكاة</div>
+    <div class="pill num" id="st-head">ش 0°</div>
+  </div>
+
+  <div id="joy" hidden><i></i></div>
+
+  <button class="fab" id="btn-menu" data-i="menu" aria-label="البيانات والإعدادات"></button>
+  <button class="fab" id="btn-map" data-i="map" aria-label="الخريطة"></button>
+  <nav id="toolbar" aria-label="الأدوات الرئيسية">
+    <button id="tb-layers" data-i="layers">الطبقات</button>
+    <button id="tb-adjust" data-i="target">الضبط</button>
+    <button id="tb-tools" data-i="tools">الأدوات</button>
+  </nav>
+
+  <!-- القياس -->
+  <div id="measure" hidden>
+    <div id="crosshair"></div>
+    <div id="seg-chip" class="num" hidden></div>
+    <div id="m-hint">وجّه المؤشر نحو الأرض ثم اضغط +</div>
+    <div id="readout">
+      <div><small id="ro-len-t">المسافة</small><b id="ro-len" class="num">0.00 م</b></div>
+      <div class="a" id="ro-area-box"><small>المساحة</small><b id="ro-area" class="num">0.00 م²</b></div>
+    </div>
+    <button class="fab" id="m-close" data-i="close" aria-label="إغلاق القياس"></button>
+    <div id="m-bar">
+      <div class="ic" id="m-ic"></div>
+      <div><b id="m-title">مساحة</b><span id="m-coord" class="num">—</span></div>
+    </div>
+    <div id="m-btns">
+      <button class="fab" id="m-done" data-i="check" aria-label="حفظ القياس"></button>
+      <button class="fab" id="m-undo" data-i="undo" aria-label="تراجع عن آخر نقطة"></button>
+      <button class="fab" id="m-add" data-i="plus" aria-label="إضافة نقطة"></button>
+    </div>
+  </div>
+
+  <!-- الطبقات -->
+  <section class="sheet" id="sh-layers" hidden>
+    <h2>الطبقات <button class="x" data-close data-i="close" aria-label="إغلاق"></button></h2>
+    <div id="layer-list"></div>
+    <label class="switch">ارتفاعات التصميم (ثلاثي الأبعاد)<input type="checkbox" id="z-elev"></label>
+    <p class="hint">عند الإيقاف يُفرَش التصميم على مستوى الأرض. عند التشغيل تُستخدم المناسيب نسبةً إلى أقرب نقطة تصميم إليك.</p>
+  </section>
+
+  <!-- الضبط -->
+  <section class="sheet" id="sh-adjust" hidden>
+    <h2>ضبط موضع التصميم <button class="x" data-close data-i="close" aria-label="إغلاق"></button></h2>
+    <p class="hint">حرّك التصميم أو دوّره حتى يطابق معلماً ظاهراً في الموقع (حافة رصيف، غطاء غرفة تفتيش).</p>
+    <div class="row" style="justify-content:center; gap:18px;">
+      <div class="pad">
+        <span></span><button data-mv="f" data-i="arrow" aria-label="للأمام"></button><span></span>
+        <button data-mv="l" data-i="arrow" class="ic-l" aria-label="لليسار"></button><span></span><button data-mv="r" data-i="arrow" class="ic-r" aria-label="لليمين"></button>
+        <span></span><button data-mv="b" data-i="arrow" class="ic-b" aria-label="للخلف"></button><span></span>
+      </div>
+      <div class="padx">
+        <button data-rot="-1" data-i="rot" aria-label="تدوير عكس عقارب الساعة"></button>
+        <button data-rot="1" data-i="rot" class="ic-flip" aria-label="تدوير مع عقارب الساعة"></button>
+        <button data-up="1" data-i="arrow">رفع</button>
+        <button data-up="-1" data-i="arrow" class="ic-b">خفض</button>
+      </div>
+    </div>
+    <div class="row">
+      <span class="hint">خطوة الحركة</span>
+      <div class="seg" id="seg-step"><button data-v="0.1">0.1 م</button><button data-v="0.5" class="on">0.5 م</button><button data-v="2">2 م</button></div>
+      <span class="hint">الدوران</span>
+      <div class="seg" id="seg-rot"><button data-v="0.5">0.5°</button><button data-v="2" class="on">2°</button><button data-v="10">10°</button></div>
+    </div>
+    <p class="hint num" id="adj-read" style="direction:rtl">بدون إزاحة</p>
+    <label class="switch"><span id="follow-t">تتبّع الموقع بـ GPS</span><input type="checkbox" id="follow" checked></label>
+    <div id="adj-sensor">
+      <label class="field">ارتفاع الهاتف عن الأرض: <span id="eye-v" class="num">1.50 م</span><input type="range" id="eye" min="0.8" max="2.2" step="0.05" value="1.5"></label>
+      <label class="field">زاوية عدسة الكاميرا: <span id="fov-v" class="num">68°</span><input type="range" id="fov" min="45" max="95" step="1" value="68"></label>
+    </div>
+    <div class="row">
+      <button class="btn sm" id="adj-ground" hidden>مستوى الأرض من المؤشر</button>
+      <button class="btn sm" id="adj-reset">إعادة الضبط</button>
+    </div>
+  </section>
+
+  <!-- الأدوات -->
+  <section class="sheet" id="sh-tools" hidden>
+    <h2>الأدوات <button class="x" data-close data-i="close" aria-label="إغلاق"></button></h2>
+    <div class="row">
+      <button class="btn grow pri" id="t-area" data-i="area">قياس مساحة</button>
+      <button class="btn grow" id="t-dist" data-i="ruler">قياس مسافة</button>
+    </div>
+    <div class="row">
+      <button class="btn grow" id="t-shot" data-i="camera">التقاط صورة</button>
+    </div>
+    <p class="hint">للاستعلام عن عنصر في التصميم اضغط عليه مباشرة في الشاشة.</p>
+    <h3>القياسات المحفوظة</h3>
+    <div id="m-list"></div>
+    <div class="row" id="m-export" hidden>
+      <button class="btn sm" id="m-copy" data-i="copy">نسخ GeoJSON</button>
+      <button class="btn sm" id="m-dl" data-i="upload">تنزيل GeoJSON</button>
+      <button class="btn sm" id="m-clear" data-i="trash">حذف الكل</button>
+    </div>
+  </section>
+
+  <!-- القائمة: البيانات والإعدادات -->
+  <section class="sheet" id="sh-menu" hidden>
+    <h2>البيانات والوضع <button class="x" data-close data-i="close" aria-label="إغلاق"></button></h2>
+    <h3>وضع التشغيل</h3>
+    <div class="row">
+      <button class="btn sm grow" id="md-cam" data-i="camera">الكاميرا</button>
+      <button class="btn sm grow" id="md-xr" data-i="cube" hidden>ARCore الدقيق</button>
+      <button class="btn sm grow" id="md-sim" data-i="walk">محاكاة</button>
+    </div>
+    <h3>استيراد ملفات التصميم</h3>
+    <div class="row">
+      <button class="btn grow" id="imp-btn" data-i="upload">اختيار ملفات</button>
+      <input type="file" id="imp-file" multiple hidden accept=".geojson,.json,.kml,.kmz,.zip,.shp,.dbf,.prj,.cpg,.dxf,.xml">
+    </div>
+    <p class="hint">GeoJSON، KML/KMZ، Shapefile (مضغوط zip أو shp+dbf+prj)، DXF، LandXML. يُفترض أن وحدات DXF بالمتر.</p>
+    <label class="field">النظام الإحداثي للملفات المسقطة (DXF، LandXML، وما لا يحمل تعريفاً)
+      <select id="crs"></select>
+    </label>
+    <label class="field" id="crs-custom-box" hidden>تعريف PROJ
+      <input id="crs-custom" dir="ltr" placeholder="+proj=utm +zone=38 +datum=WGS84 +units=m +no_defs" autocomplete="off" spellcheck="false">
+    </label>
+    <h3>طبقة ArcGIS Online</h3>
+    <label class="field">رابط الطبقة (Feature Layer)
+      <input id="ags-url" dir="ltr" placeholder="https://services.arcgis.com/…/FeatureServer/0" autocomplete="off" spellcheck="false" inputmode="url">
+    </label>
+    <div class="row">
+      <label class="field grow">رمز الدخول (للطبقات الخاصة)
+        <input id="ags-token" dir="ltr" type="password" autocomplete="off" placeholder="اختياري">
+      </label>
+      <label class="field" style="width:110px">نصف القطر
+        <select id="ags-r"><option value="200">200 م</option><option value="500" selected>500 م</option><option value="1000">1 كم</option><option value="3000">3 كم</option></select>
+      </label>
+    </div>
+    <button class="btn" id="ags-go" data-i="layers">تحميل المعالم حول موقعي</button>
+    <h3>بيانات تجريبية</h3>
+    <button class="btn" id="demo-go" data-i="road">وضع طريق تجريبي أمامي</button>
+    <p class="hint">مرقاب AR يعرض التصميم كما هو في ملفاتك. دقة المطابقة مع الواقع تعتمد على دقة GPS في الهاتف (عدة أمتار) وعلى الضبط اليدوي، وليست بديلاً عن الرفع المساحي.</p>
+  </section>
+
+  <!-- بطاقة الاستعلام -->
+  <div class="card" id="ident" hidden>
+    <h2><span style="display:flex;align-items:center;gap:8px"><i id="id-chip"></i><span id="id-layer"></span></span><button class="x" id="id-close" data-i="close" aria-label="إغلاق"></button></h2>
+    <table><tbody id="id-rows"></tbody></table>
+  </div>
+
+  <!-- الخريطة -->
+  <div id="mapview" hidden>
+    <canvas id="mapc"></canvas>
+    <div id="mv-opt">
+      <label class="pill" style="pointer-events:auto;gap:6px"><input type="checkbox" id="mv-tiles" checked> صور جوية</label>
+      <label class="pill" id="mv-tp-box" style="pointer-events:auto;gap:6px" hidden><input type="checkbox" id="mv-tp"> انقر للانتقال</label>
+    </div>
+    <button class="fab" id="mv-close" data-i="close" aria-label="إغلاق الخريطة"></button>
+    <div id="mv-ctl">
+      <button class="fab" id="mv-in" data-i="plus" aria-label="تكبير"></button>
+      <button class="fab" id="mv-out" data-i="minus" aria-label="تصغير"></button>
+      <button class="fab" id="mv-me" data-i="target" aria-label="تمركز على موقعي"></button>
+    </div>
+    <div id="mv-attr">Imagery © Esri, Maxar, Earthstar Geographics</div>
+  </div>
+
+  <!-- بطاقة البدء -->
+  <div class="card" id="start">
+    <h1>مرقاب <span>AR</span></h1>
+    <p>اعرض تصميم الطريق بحجمه الحقيقي فوق الموقع، واستعلم عن عناصره، وقِس المسافات والمساحات.</p>
+    <div class="note" id="st-note" hidden></div>
+    <button class="btn pri" id="st-cam" data-i="camera">تشغيل الكاميرا والواقع المعزز</button>
+    <button class="btn" id="st-xr" data-i="cube" hidden>وضع ARCore الدقيق (أندرويد)</button>
+    <button class="btn" id="st-sim" data-i="walk">تجربة المحاكاة</button>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<script src="vendor/proj4.js"></script>
+<script src="vendor/shp.js"></script>
+<script src="vendor/fflate.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
