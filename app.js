@@ -1,6 +1,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import { D2R, R2D, makeENU, haversine, wrapPi, pathLength, polyArea3, fitRigid2D, rotY, fmtLen, fmtArea, coverFov, demoRoad } from './geo.js';
 import { CRS_PRESETS, parseFiles, fetchArcGIS, eachCoord } from './parsers.js';
+import { classifyPoint, classifyLine, makeModel, makePipe, hitBox, labelHeight, addLights } from './models.js';
 
 const $ = id => document.getElementById(id);
 const PALETTE = ['#3d6ff2', '#e5484d', '#2fb574', '#ffc53d', '#22c3dd', '#c4a7ff', '#ff8b3e', '#f4f4f0'];
@@ -48,6 +49,7 @@ const S = {
   zMode: 'flat', zRef: 0,
   adj: { e: 0, n: 0, up: 0, yaw: 0 },
   eyeH: 1.5, fovLong: 68, follow: true,
+  models: true, under: true,
   step: 0.5, rotStep: 2,
   gps: null, gpsEN: null, gpsOrigin: false,
   geo: { phi: 0, tx: 0, ty: 0, tz: 0, ready: false },
@@ -76,6 +78,7 @@ const measG = new THREE.Group();
 const liveG = new THREE.Group();
 const simEnv = new THREE.Group();
 scene.add(simEnv, world);
+addLights(scene);
 world.add(measG, liveG);
 measG.renderOrder = 400;
 
@@ -140,9 +143,40 @@ const reticle = new THREE.Group();
 // ---------- بناء هندسة الطبقات ----------
 function disposeGroup(g) {
   g.traverse(o => {
-    if (o.geometry) o.geometry.dispose();
-    if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+    for (const m of mats) { if (m.userData.shared) continue; if (m.map) m.map.dispose(); m.dispose(); }
   });
+}
+
+// اتجاه أقرب خط تصميم لنقطة محلية (لتوجيه المجسمات مع الطريق)
+let segCache = null;
+function invalidateSegs() { segCache = null; }
+function roadSegs() {
+  if (segCache) return segCache;
+  const out = [];
+  for (const L of S.layers) for (const f of L.features) {
+    const g = f.geometry; if (!g) continue;
+    const lines = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : g.type === 'Polygon' ? g.coordinates : [];
+    for (const cs of lines) {
+      if (cs.length < 2 || out.length > 40000) continue;
+      let prev = S.enu.fwd(cs[0][0], cs[0][1]);
+      for (let i = 1; i < cs.length; i++) { const q = S.enu.fwd(cs[i][0], cs[i][1]); out.push(prev[0], -prev[1], q[0], -q[1]); prev = q; }
+    }
+  }
+  return (segCache = out);
+}
+function roadYaw(v) {
+  const A = roadSegs();
+  let best = 400, yaw = 0; // في حدود 20 م فقط
+  for (let i = 0; i < A.length; i += 4) {
+    const ax = A[i], az = A[i + 1], dx = A[i + 2] - ax, dz = A[i + 3] - az, l2 = dx * dx + dz * dz;
+    if (l2 < 1e-6) continue;
+    const t = Math.max(0, Math.min(1, ((v[0] - ax) * dx + (v[2] - az) * dz) / l2));
+    const ex = ax + t * dx - v[0], ez = az + t * dz - v[2], d2 = ex * ex + ez * ez;
+    if (d2 < best) { best = d2; yaw = Math.atan2(-dz, dx); }
+  }
+  return yaw;
 }
 
 function toLocal(c) {
@@ -231,13 +265,30 @@ function buildLayer(L) {
   G.visible = L.visible;
   L.group = G;
   const idx = S.layers.indexOf(L), lift = 0.01 + idx * 0.004;
-  const fill = { p: [], f: [] }, rib = { p: [], f: [] }, pts = { p: [], f: [] }, thin = [], labels = [];
+  const fill = { p: [], f: [] }, rib = { p: [], f: [] }, pts = { p: [], f: [] }, hit = { p: [], f: [] }, thin = [], labels = [], models = [];
   const seg = (P, l) => { for (let i = 1; i < P.length; i++) thin.push(P[i - 1][0], P[i - 1][1] + l, P[i - 1][2], P[i][0], P[i][1] + l, P[i][2]); };
   L.features.forEach((f, fi) => {
     const g = f.geometry;
     if (!g) return;
-    const doPoint = c => { const v = toLocal(c); marker(pts, v, fi); const t = labelOf(f.properties); if (t && labels.length < 200) labels.push([t, v]); };
-    const doLine = cs => { const P = cs.map(toLocal); ribbon(rib, P, 0.14, fi, lift + 0.006); seg(P, lift + 0.006); };
+    const pkind = S.models ? classifyPoint(f.properties, L.name) : null;
+    const doPoint = c => {
+      const v = toLocal(c);
+      let lh = 1.95;
+      if (pkind && models.length < 3000) {
+        const yaw = roadYaw(v) + (pkind === 'lp' ? Math.PI / 2 : 0);
+        const m = makeModel(pkind, v, yaw, f.properties);
+        if (m) { models.push(m); hitBox(hit, pkind, v, yaw, f.properties, fi); lh = labelHeight(pkind, f.properties); }
+        else marker(pts, v, fi);
+      } else marker(pts, v, fi);
+      const t = labelOf(f.properties);
+      if (t && labels.length < 200) labels.push([t, v, lh]);
+    };
+    const lkind = S.models ? classifyLine(f.properties, L.name) : null;
+    const doLine = cs => {
+      const P = cs.map(toLocal);
+      ribbon(rib, P, 0.14, fi, lift + 0.006); seg(P, lift + 0.006);
+      if (lkind === 'pipe' && models.length < 3000) { const m = makePipe(P, f.properties); if (m) models.push(m); }
+    };
     const doPoly = rings => { const R = rings.map(r => r.map(toLocal)); polygonTris(fill, R, fi, lift); for (const P of R) { ribbon(rib, P, 0.07, fi, lift + 0.004); seg(P, lift + 0.004); } };
     if (g.type === 'Point') doPoint(g.coordinates);
     else if (g.type === 'MultiPoint') g.coordinates.forEach(doPoint);
@@ -266,6 +317,15 @@ function buildLayer(L) {
   mesh(fill, L.opacity, idx);
   mesh(rib, Math.min(1, L.opacity + 0.4), 100 + idx);
   mesh(pts, 1, 200 + idx);
+  for (const m of models) { m.traverse(o => { if (o.userData.under) o.visible = S.under; }); G.add(m); }
+  if (hit.p.length) { // صناديق التقاط غير مرئية للمجسمات
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(hit.p, 3));
+    const hm = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, colorWrite: false, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
+    hm.renderOrder = 200 + idx;
+    hm.userData = { layer: L, tri: hit.f, hit: true };
+    G.add(hm);
+  }
   if (thin.length) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(thin, 3));
@@ -274,9 +334,9 @@ function buildLayer(L) {
     G.add(ls);
   }
   G.userData.labels = [];
-  for (const [t, v] of labels) {
+  for (const [t, v, lh] of labels) {
     const s = makeLabel(t);
-    s.position.set(v[0], v[1] + 1.95, v[2]);
+    s.position.set(v[0], v[1] + lh, v[2]);
     G.add(s);
     G.userData.labels.push(s);
   }
@@ -287,7 +347,7 @@ function applyLayerStyle(L) {
   if (!L.group) return;
   L.group.visible = L.visible;
   L.group.traverse(o => {
-    if (!o.material || o.isSprite) return;
+    if (!o.material || o.isSprite || o.userData.model || o.userData.hit) return;
     o.material.color.set(L.color);
     if (o.isLineSegments) o.material.opacity = Math.min(1, L.opacity + 0.4);
     else if (o.userData.base !== undefined) o.material.opacity = o.renderOrder < 100 ? L.opacity : o.renderOrder < 200 ? Math.min(1, L.opacity + 0.4) : 1;
@@ -297,6 +357,7 @@ function applyLayerStyle(L) {
 function addLayer(d) {
   const L = { id: 'L' + (++uid), name: d.name, color: d.color || PALETTE[S.layers.length % PALETTE.length], opacity: d.opacity ?? 0.55, visible: d.visible ?? true, features: d.features, demo: !!d.demo, src: d.src || '', group: null };
   S.layers.push(L);
+  invalidateSegs();
   buildLayer(L);
   return L;
 }
@@ -304,6 +365,7 @@ function addLayer(d) {
 function removeLayer(L) {
   if (L.group) { world.remove(L.group); disposeGroup(L.group); }
   S.layers.splice(S.layers.indexOf(L), 1);
+  invalidateSegs();
   S.layers.forEach(buildLayer);
 }
 
@@ -331,6 +393,7 @@ function setOrigin(lat, lon) {
   S.enu = makeENU(lat, lon);
   const [e, n] = S.enu.fwd(S.user.lon, S.user.lat);
   S.user.e = e; S.user.n = n;
+  invalidateSegs();
   S.layers.forEach(buildLayer);
   for (const m of S.measures) m.local = m.pts.map(p => { const [x, y] = S.enu.fwd(p[0], p[1]); return [x, p[2] || 0, -y]; });
   S.cur = S.cur.map(p => { const [x, y] = S.enu.fwd(p.lon, p.lat); const q = [x, p[1], -y]; q.lon = p.lon; q.lat = p.lat; return q; });
@@ -342,6 +405,7 @@ function placeDemo() {
   const h = S.headingDeg * D2R;
   const e0 = S.user.e - Math.sin(h) * 10 - Math.cos(h) * 2.83, n0 = S.user.n - Math.cos(h) * 10 + Math.sin(h) * 2.83;
   for (const l of demoRoad(S.enu, e0, n0, S.headingDeg)) addLayer({ ...l, demo: true });
+  invalidateSegs();
   S.layers.forEach(buildLayer);
   renderLayers();
 }
@@ -358,7 +422,7 @@ function saveLayers() {
   saveT = setTimeout(() => DB.set('layers', S.layers.filter(l => !l.demo).map(l => ({ name: l.name, color: l.color, opacity: l.opacity, visible: l.visible, features: l.features, src: l.src }))), 150);
 }
 function saveMeasures() { try { localStorage.setItem('mirqab.measures', JSON.stringify(S.measures.map(m => ({ type: m.type, pts: m.pts, length: m.length, area: m.area, t: m.t })))); } catch { /* لا تخزين */ } }
-function savePrefs() { try { localStorage.setItem('mirqab.prefs', JSON.stringify({ eyeH: S.eyeH, fovLong: S.fovLong, crs: $('crs').value, custom: $('crs-custom').value, url: $('ags-url').value })); } catch { /* لا تخزين */ } }
+function savePrefs() { try { localStorage.setItem('mirqab.prefs', JSON.stringify({ models: S.models, under: S.under, eyeH: S.eyeH, fovLong: S.fovLong, crs: $('crs').value, custom: $('crs-custom').value, url: $('ags-url').value })); } catch { /* لا تخزين */ } }
 
 // ---------- واجهة: أدوات عامة ----------
 let toastT = 0;
@@ -410,6 +474,8 @@ function renderLayers() {
   });
 }
 
+$('mdl-on').onchange = e => { S.models = e.target.checked; S.layers.forEach(buildLayer); savePrefs(); };
+$('mdl-under').onchange = e => { S.under = e.target.checked; for (const L of S.layers) if (L.group) L.group.traverse(o => { if (o.userData.under) o.visible = S.under; }); savePrefs(); };
 $('z-elev').onchange = e => {
   S.zMode = e.target.checked ? 'elev' : 'flat';
   if (S.zMode === 'elev') computeZRef();
@@ -1288,6 +1354,8 @@ renderer.setAnimationLoop((t, frame) => {
 async function init() {
   try {
     const p = JSON.parse(localStorage.getItem('mirqab.prefs') || '{}');
+    if (p.models === false) { S.models = false; $('mdl-on').checked = false; }
+    if (p.under === false) { S.under = false; $('mdl-under').checked = false; }
     if (p.eyeH) { S.eyeH = p.eyeH; $('eye').value = p.eyeH; }
     if (p.fovLong) { S.fovLong = p.fovLong; $('fov').value = p.fovLong; }
     if (p.crs) $('crs').value = p.crs;

@@ -182,6 +182,12 @@ export function demoRoad(enu, e0, n0, headingDeg) {
     cb++;
     drain.push(point(i, 8.0, { label: 'CB-' + String(cb).padStart(2, '0'), 'النوع': 'مصيدة سيول', 'المحطة': fmtSta(cl[i][3]), 'قطر التوصيلة (مم)': 300 }, crown(8)));
   }
+  let mh = 0;
+  for (let i = 15; i < cl.length; i += 30) {
+    mh++;
+    drain.push(point(i, 12.2, { label: 'MH-' + String(mh).padStart(2, '0'), 'النوع': 'منهل تفتيش', 'المحطة': fmtSta(cl[i][3]), 'العمق (م)': 2.5, 'قطر الغطاء (مم)': 650 }, crown(12.2)));
+  }
+  const masts = [0, 60].map((i, k) => point(i + 25, -20, { label: 'HM-' + String(k + 1).padStart(2, '0'), 'النوع': 'صاري إنارة عالٍ', 'الارتفاع (م)': 30, 'عدد الكشافات': 8, 'المحطة': fmtSta(cl[i + 25][3]) }, 0));
   const lights = [];
   let lp = 0;
   for (let i = 8; i < cl.length; i += 17) {
@@ -198,5 +204,6 @@ export function demoRoad(enu, e0, n0, headingDeg) {
     { name: 'المحور والمحطات', color: '#ffc53d', opacity: 0.9, features: axis },
     { name: 'تصريف السيول', color: '#22c3dd', opacity: 0.9, features: drain },
     { name: 'أعمدة الإنارة', color: '#c4a7ff', opacity: 0.9, features: lights },
+    { name: 'صواري الإنارة', color: '#ff8b3e', opacity: 0.9, features: masts },
   ];
 }
